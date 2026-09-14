@@ -283,6 +283,268 @@ async function dismissSavedTab(id) {
   }
 }
 
+/* ----------------------------------------------------------------
+   TODAY'S PRIORITIES — chrome.storage.local
+
+   Priority items are intentionally separate from "Saved for Later":
+   they are short, user-written commitments for the current day.
+   Unfinished items are carried forward once when a new day is opened.
+   ---------------------------------------------------------------- */
+
+const PRIORITY_STORAGE_KEY = 'priorityTasks';
+
+function getPriorityDateKey(date = new Date()) {
+  const year  = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day   = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function createPriorityId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return `priority-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function escapeHtml(value) {
+  const entities = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
+}
+
+function normalizePriorityTasks(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  return tasks
+    .filter(task => task && typeof task.text === 'string' && task.date)
+    .map(task => ({
+      ...task,
+      text: task.text.trim(),
+      completed: Boolean(task.completed),
+      order: Number.isFinite(task.order) ? task.order : 0,
+    }))
+    .filter(task => task.text);
+}
+
+/**
+ * getPriorityState()
+ *
+ * Loads all priority history and carries forward pending work from any
+ * earlier day that has not already been carried forward. The original
+ * item is retained as history and marked with carriedToDate so deleting
+ * today's copy does not make it unexpectedly reappear tomorrow.
+ */
+async function getPriorityState() {
+  const today = getPriorityDateKey();
+  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
+  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
+  const pending = tasks
+    .filter(task => task.date < today && !task.completed && !task.carriedToDate)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.order - b.order);
+
+  let inheritedCount = 0;
+  if (pending.length > 0) {
+    const todayTasks = tasks.filter(task => task.date === today);
+    let nextOrder = todayTasks.reduce(
+      (max, task) => Math.max(max, task.order),
+      -1
+    ) + 1;
+
+    for (const previous of pending) {
+      previous.carriedToDate = today;
+      const { carriedToDate, ...copy } = previous;
+      tasks.push({
+        ...copy,
+        id: createPriorityId(),
+        date: today,
+        createdAt: new Date().toISOString(),
+        completed: false,
+        inherited: true,
+        inheritedFrom: previous.date,
+        order: nextOrder++,
+      });
+      inheritedCount += 1;
+    }
+
+    await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
+  }
+
+  return {
+    all: tasks,
+    today: tasks
+      .filter(task => task.date === today)
+      .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt)),
+    inheritedCount,
+  };
+}
+
+async function addPriorityTask(text) {
+  const cleanText = text.trim();
+  if (!cleanText) return false;
+
+  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
+  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
+  const today = getPriorityDateKey();
+  const todayTasks = tasks.filter(task => task.date === today);
+  const nextOrder = todayTasks.reduce(
+    (max, task) => Math.max(max, task.order),
+    -1
+  ) + 1;
+
+  tasks.push({
+    id: createPriorityId(),
+    text: cleanText.slice(0, 160),
+    date: today,
+    createdAt: new Date().toISOString(),
+    completed: false,
+    inherited: false,
+    order: nextOrder,
+  });
+
+  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
+  return true;
+}
+
+async function updatePriorityTask(id, patch) {
+  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
+  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
+  const task = tasks.find(item => item.id === id);
+  if (!task) return;
+
+  Object.assign(task, patch);
+  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
+}
+
+async function deletePriorityTask(id) {
+  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
+  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
+  await chrome.storage.local.set({
+    [PRIORITY_STORAGE_KEY]: tasks.filter(task => task.id !== id),
+  });
+}
+
+async function movePriorityTask(id, direction) {
+  const { all, today } = await getPriorityState();
+  const index = today.findIndex(task => task.id === id);
+  const targetIndex = index + direction;
+  if (index < 0 || targetIndex < 0 || targetIndex >= today.length) return;
+
+  [today[index], today[targetIndex]] = [today[targetIndex], today[index]];
+  today.forEach((task, order) => { task.order = order; });
+
+  const todayIds = new Set(today.map(task => task.id));
+  const reordered = all.map(task => todayIds.has(task.id)
+    ? today.find(item => item.id === task.id)
+    : task);
+  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: reordered });
+}
+
+async function reorderPriorityTasks(sourceId, targetId) {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+
+  const { all, today } = await getPriorityState();
+  const sourceIndex = today.findIndex(task => task.id === sourceId);
+  const targetIndex = today.findIndex(task => task.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  const [source] = today.splice(sourceIndex, 1);
+  today.splice(today.findIndex(task => task.id === targetId), 0, source);
+  today.forEach((task, order) => { task.order = order; });
+
+  const todayIds = new Set(today.map(task => task.id));
+  const reordered = all.map(task => todayIds.has(task.id)
+    ? today.find(item => item.id === task.id)
+    : task);
+  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: reordered });
+}
+
+function renderPriorityItem(item, index, total) {
+  const safeId = escapeHtml(item.id);
+  const safeText = escapeHtml(item.text);
+  const inheritedLabel = item.inherited
+    ? '<span class="priority-origin">carried over</span>'
+    : '';
+
+  return `
+    <li class="priority-item${item.completed ? ' is-complete' : ''}" data-priority-id="${safeId}" draggable="true">
+      <button class="priority-drag" type="button" aria-label="Drag to reorder" title="Drag to reorder">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true">
+          <path stroke-linecap="round" d="M8 6h.01M8 12h.01M8 18h.01M16 6h.01M16 12h.01M16 18h.01" />
+        </svg>
+      </button>
+      <input
+        class="priority-checkbox"
+        type="checkbox"
+        data-action="toggle-priority"
+        data-priority-id="${safeId}"
+        ${item.completed ? 'checked' : ''}
+        aria-label="${item.completed ? 'Reopen' : 'Complete'} priority"
+      >
+      <div class="priority-task-body">
+        <input
+          class="priority-task-input"
+          type="text"
+          value="${safeText}"
+          maxlength="160"
+          data-priority-id="${safeId}"
+          aria-label="Priority ${index + 1}"
+        >
+        ${inheritedLabel}
+      </div>
+      <div class="priority-item-actions">
+        <button class="priority-move" type="button" data-action="move-priority-up" data-priority-id="${safeId}" aria-label="Move priority up" title="Move up" ${index === 0 ? 'disabled' : ''}>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m5 15 7-7 7 7" /></svg>
+        </button>
+        <button class="priority-move" type="button" data-action="move-priority-down" data-priority-id="${safeId}" aria-label="Move priority down" title="Move down" ${index === total - 1 ? 'disabled' : ''}>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m5 9 7 7 7-7" /></svg>
+        </button>
+        <button class="priority-delete" type="button" data-action="delete-priority" data-priority-id="${safeId}" aria-label="Delete priority" title="Delete">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+    </li>`;
+}
+
+async function renderPriorityBoard() {
+  const list = document.getElementById('priorityList');
+  const empty = document.getElementById('priorityEmpty');
+  const dateEl = document.getElementById('priorityDate');
+  const carryoverEl = document.getElementById('priorityCarryover');
+  const progressEl = document.getElementById('priorityProgressValue');
+  if (!list || !empty) return;
+
+  try {
+    const { today, inheritedCount } = await getPriorityState();
+    const completedCount = today.filter(task => task.completed).length;
+
+    if (dateEl) {
+      dateEl.textContent = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      });
+    }
+    if (progressEl) progressEl.textContent = `${completedCount}/${today.length}`;
+    if (carryoverEl) {
+      carryoverEl.textContent = inheritedCount > 0
+        ? `${inheritedCount} unfinished item${inheritedCount !== 1 ? 's' : ''} carried over`
+        : '';
+    }
+
+    list.innerHTML = today.map((task, index) =>
+      renderPriorityItem(task, index, today.length)
+    ).join('');
+    list.style.display = today.length > 0 ? 'flex' : 'none';
+    empty.style.display = today.length > 0 ? 'none' : 'flex';
+  } catch (err) {
+    console.warn('[tab-out] Could not load priorities:', err);
+    list.style.display = 'none';
+    empty.style.display = 'flex';
+  }
+}
+
 
 /* ----------------------------------------------------------------
    UI HELPERS
@@ -1166,6 +1428,9 @@ async function renderStaticDashboard() {
 
   // --- Render "Saved for Later" column ---
   await renderDeferredColumn();
+
+  // --- Render today's local priorities ---
+  await renderPriorityBoard();
 }
 
 async function renderDashboard() {
@@ -1187,6 +1452,40 @@ document.addEventListener('click', async (e) => {
   if (!actionEl) return;
 
   const action = actionEl.dataset.action;
+
+  // ---- Complete or reopen a priority ----
+  if (action === 'toggle-priority') {
+    const id = actionEl.dataset.priorityId;
+    if (!id) return;
+
+    await updatePriorityTask(id, {
+      completed: actionEl.checked,
+      completedAt: actionEl.checked ? new Date().toISOString() : null,
+    });
+    await renderPriorityBoard();
+    return;
+  }
+
+  // ---- Move a priority one step ----
+  if (action === 'move-priority-up' || action === 'move-priority-down') {
+    const id = actionEl.dataset.priorityId;
+    if (!id || actionEl.disabled) return;
+
+    await movePriorityTask(id, action === 'move-priority-up' ? -1 : 1);
+    await renderPriorityBoard();
+    return;
+  }
+
+  // ---- Delete a priority ----
+  if (action === 'delete-priority') {
+    const id = actionEl.dataset.priorityId;
+    if (!id) return;
+
+    await deletePriorityTask(id);
+    showToast('Priority removed');
+    await renderPriorityBoard();
+    return;
+  }
 
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
@@ -1431,6 +1730,102 @@ document.addEventListener('click', async (e) => {
     showToast('All tabs closed. Fresh start.');
     return;
   }
+});
+
+// ---- Add and edit today's priorities ----
+const priorityForm = document.getElementById('priorityForm');
+if (priorityForm) {
+  priorityForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const input = document.getElementById('priorityInput');
+    if (!input || !input.value.trim()) {
+      input?.focus();
+      return;
+    }
+
+    await addPriorityTask(input.value);
+    input.value = '';
+    await renderPriorityBoard();
+    input.focus();
+  });
+}
+
+document.addEventListener('change', async (e) => {
+  const input = e.target.closest('.priority-task-input');
+  if (!input) return;
+
+  const text = input.value.trim();
+  if (!text) {
+    showToast('A priority needs a title');
+    await renderPriorityBoard();
+    return;
+  }
+
+  await updatePriorityTask(input.dataset.priorityId, {
+    text: text.slice(0, 160),
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (!e.target.matches('.priority-task-input')) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.target.blur();
+  }
+});
+
+// ---- Drag-to-reorder priorities ----
+let draggedPriorityId = null;
+
+document.addEventListener('dragstart', (e) => {
+  const item = e.target.closest('.priority-item');
+  const handle = e.target.closest('.priority-drag');
+  if (!item || !handle) {
+    e.preventDefault();
+    return;
+  }
+
+  draggedPriorityId = item.dataset.priorityId;
+  item.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', draggedPriorityId);
+});
+
+document.addEventListener('dragover', (e) => {
+  const item = e.target.closest('.priority-item');
+  if (!item || !draggedPriorityId) return;
+
+  e.preventDefault();
+  document.querySelectorAll('.priority-item.drag-over').forEach(el => {
+    el.classList.remove('drag-over');
+  });
+  if (item.dataset.priorityId !== draggedPriorityId) {
+    item.classList.add('drag-over');
+  }
+});
+
+document.addEventListener('drop', async (e) => {
+  const item = e.target.closest('.priority-item');
+  if (!item || !draggedPriorityId) return;
+
+  e.preventDefault();
+  const targetId = item.dataset.priorityId;
+  document.querySelectorAll('.priority-item.drag-over').forEach(el => {
+    el.classList.remove('drag-over');
+  });
+
+  await reorderPriorityTasks(draggedPriorityId, targetId);
+  draggedPriorityId = null;
+  await renderPriorityBoard();
+});
+
+document.addEventListener('dragend', (e) => {
+  e.target.closest('.priority-item')?.classList.remove('dragging');
+  document.querySelectorAll('.priority-item.drag-over').forEach(el => {
+    el.classList.remove('drag-over');
+  });
+  draggedPriorityId = null;
 });
 
 // ---- Archive toggle — expand/collapse the archive section ----

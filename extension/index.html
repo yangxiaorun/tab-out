@@ -47,6 +47,50 @@
   </div>
 
   <!-- ================================================================
+       TODAY'S PRIORITIES — local, manually maintained task list
+       ================================================================ -->
+  <section class="priority-panel" id="priorityPanel">
+    <div class="priority-heading">
+      <div>
+        <div class="priority-kicker">Daily focus</div>
+        <div class="priority-title-row">
+          <h2>Today's priorities</h2>
+          <span class="priority-date" id="priorityDate"></span>
+        </div>
+        <div class="priority-carryover" id="priorityCarryover" aria-live="polite"></div>
+      </div>
+      <div class="priority-progress" aria-live="polite">
+        <strong id="priorityProgressValue">0/0</strong>
+        <span>done</span>
+      </div>
+    </div>
+
+    <form class="priority-form" id="priorityForm">
+      <label class="sr-only" for="priorityInput">Add a priority</label>
+      <input
+        id="priorityInput"
+        class="priority-input"
+        type="text"
+        maxlength="160"
+        autocomplete="off"
+        placeholder="What matters today?"
+      >
+      <button class="priority-add" type="submit">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+        Add priority
+      </button>
+    </form>
+
+    <ol class="priority-list" id="priorityList" aria-live="polite"></ol>
+    <div class="priority-empty" id="priorityEmpty">
+      <span>Nothing set yet.</span>
+      <span class="priority-empty-mark">Make the first move.</span>
+    </div>
+  </section>
+
+  <!-- ================================================================
        MAIN CONTENT AREA — two-column layout
        Left: open tabs (domain/mission cards)
        Right: saved for later checklist
