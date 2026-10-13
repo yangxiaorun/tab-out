@@ -6,3 +6,11 @@ docs/superpowers/
 
 # Personal config (landing page patterns, etc.) — never push to GitHub
 extension/config.local.js
+
+# Private todo data and local secrets belong outside the code repository
+todo/
+history.json
+.env
+.env.*
+__pycache__/
+*.pyc

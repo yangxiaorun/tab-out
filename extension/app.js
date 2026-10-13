@@ -284,25 +284,14 @@ async function dismissSavedTab(id) {
 }
 
 /* ----------------------------------------------------------------
-   TODAY'S PRIORITIES — chrome.storage.local
-
-   Priority items are intentionally separate from "Saved for Later":
-   they are short, user-written commitments for the current day.
-   Unfinished items are carried forward once when a new day is opened.
+   TODAY'S PRIORITIES — background-owned event history
+   Pending tasks keep their identity and original plan time across days.
    ---------------------------------------------------------------- */
 
-const PRIORITY_STORAGE_KEY = 'priorityTasks';
-
-function getPriorityDateKey(date = new Date()) {
-  const year  = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day   = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function createPriorityId() {
-  if (crypto.randomUUID) return crypto.randomUUID();
-  return `priority-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+async function priorityRequest(action, payload = {}) {
+  const response = await chrome.runtime.sendMessage({ channel: 'priority', action, ...payload });
+  if (!response?.ok) throw new Error(response?.error || 'Could not save priorities. Please reload the extension.');
+  return response.data;
 }
 
 function escapeHtml(value) {
@@ -316,149 +305,57 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
 }
 
-function normalizePriorityTasks(tasks) {
-  if (!Array.isArray(tasks)) return [];
-  return tasks
-    .filter(task => task && typeof task.text === 'string' && task.date)
-    .map(task => ({
-      ...task,
-      text: task.text.trim(),
-      completed: Boolean(task.completed),
-      order: Number.isFinite(task.order) ? task.order : 0,
-    }))
-    .filter(task => task.text);
+function getPriorityState() {
+  return priorityRequest('dispatch', { operation: { type: 'state' } });
 }
 
-/**
- * getPriorityState()
- *
- * Loads all priority history and carries forward pending work from any
- * earlier day that has not already been carried forward. The original
- * item is retained as history and marked with carriedToDate so deleting
- * today's copy does not make it unexpectedly reappear tomorrow.
- */
-async function getPriorityState() {
-  const today = getPriorityDateKey();
-  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
-  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
-  const pending = tasks
-    .filter(task => task.date < today && !task.completed && !task.carriedToDate)
-    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.order - b.order);
+function addPriorityTask(text) {
+  return priorityRequest('dispatch', { operation: { type: 'add', text } });
+}
 
-  let inheritedCount = 0;
-  if (pending.length > 0) {
-    const todayTasks = tasks.filter(task => task.date === today);
-    let nextOrder = todayTasks.reduce(
-      (max, task) => Math.max(max, task.order),
-      -1
-    ) + 1;
+function updatePriorityTask(id, patch) {
+  return priorityRequest('dispatch', { operation: { type: 'update', id, patch } });
+}
 
-    for (const previous of pending) {
-      previous.carriedToDate = today;
-      const { carriedToDate, ...copy } = previous;
-      tasks.push({
-        ...copy,
-        id: createPriorityId(),
-        date: today,
-        createdAt: new Date().toISOString(),
-        completed: false,
-        inherited: true,
-        inheritedFrom: previous.date,
-        order: nextOrder++,
-      });
-      inheritedCount += 1;
-    }
+function deletePriorityTask(id) {
+  return priorityRequest('dispatch', { operation: { type: 'delete', id } });
+}
 
-    await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
+function movePriorityTask(id, direction) {
+  return priorityRequest('dispatch', { operation: { type: 'move', id, direction } });
+}
+
+function reorderPriorityTasks(sourceId, targetId) {
+  return priorityRequest('dispatch', { operation: { type: 'reorder', id: sourceId, targetId } });
+}
+
+async function renderPrioritySync() {
+  const status = await priorityRequest('sync-status');
+  const label = document.getElementById('prioritySyncStatus');
+  if (!label) return;
+  label.textContent = status.lastSyncedAt && status.state === 'synced'
+    ? `Synced ${new Date(status.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : status.message;
+  label.dataset.state = status.state;
+  label.title = status.configured ? `${status.owner}/${status.repo} · ${status.message}` : status.message;
+  document.getElementById('prioritySyncNow').hidden = !status.configured;
+  document.getElementById('prioritySyncDisconnect').hidden = !status.configured;
+  const form = document.getElementById('prioritySyncForm');
+  if (!form.contains(document.activeElement)) {
+    document.getElementById('prioritySyncOwner').value = status.owner || '';
+    document.getElementById('prioritySyncRepo').value = status.repo || '';
   }
-
-  return {
-    all: tasks,
-    today: tasks
-      .filter(task => task.date === today)
-      .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt)),
-    inheritedCount,
-  };
+  document.getElementById('prioritySyncToken').placeholder = status.configured
+    ? 'Leave blank to keep the saved token' : 'GitHub personal access token';
+  document.getElementById('prioritySyncToken').required = !status.configured;
 }
 
-async function addPriorityTask(text) {
-  const cleanText = text.trim();
-  if (!cleanText) return false;
-
-  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
-  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
-  const today = getPriorityDateKey();
-  const todayTasks = tasks.filter(task => task.date === today);
-  const nextOrder = todayTasks.reduce(
-    (max, task) => Math.max(max, task.order),
-    -1
-  ) + 1;
-
-  tasks.push({
-    id: createPriorityId(),
-    text: cleanText.slice(0, 160),
-    date: today,
-    createdAt: new Date().toISOString(),
-    completed: false,
-    inherited: false,
-    order: nextOrder,
-  });
-
-  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
-  return true;
-}
-
-async function updatePriorityTask(id, patch) {
-  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
-  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
-  const task = tasks.find(item => item.id === id);
-  if (!task) return;
-
-  Object.assign(task, patch);
-  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: tasks });
-}
-
-async function deletePriorityTask(id) {
-  const stored = await chrome.storage.local.get(PRIORITY_STORAGE_KEY);
-  const tasks = normalizePriorityTasks(stored[PRIORITY_STORAGE_KEY]);
-  await chrome.storage.local.set({
-    [PRIORITY_STORAGE_KEY]: tasks.filter(task => task.id !== id),
-  });
-}
-
-async function movePriorityTask(id, direction) {
-  const { all, today } = await getPriorityState();
-  const index = today.findIndex(task => task.id === id);
-  const targetIndex = index + direction;
-  if (index < 0 || targetIndex < 0 || targetIndex >= today.length) return;
-
-  [today[index], today[targetIndex]] = [today[targetIndex], today[index]];
-  today.forEach((task, order) => { task.order = order; });
-
-  const todayIds = new Set(today.map(task => task.id));
-  const reordered = all.map(task => todayIds.has(task.id)
-    ? today.find(item => item.id === task.id)
-    : task);
-  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: reordered });
-}
-
-async function reorderPriorityTasks(sourceId, targetId) {
-  if (!sourceId || !targetId || sourceId === targetId) return;
-
-  const { all, today } = await getPriorityState();
-  const sourceIndex = today.findIndex(task => task.id === sourceId);
-  const targetIndex = today.findIndex(task => task.id === targetId);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-
-  const [source] = today.splice(sourceIndex, 1);
-  today.splice(today.findIndex(task => task.id === targetId), 0, source);
-  today.forEach((task, order) => { task.order = order; });
-
-  const todayIds = new Set(today.map(task => task.id));
-  const reordered = all.map(task => todayIds.has(task.id)
-    ? today.find(item => item.id === task.id)
-    : task);
-  await chrome.storage.local.set({ [PRIORITY_STORAGE_KEY]: reordered });
+async function runPriorityAction(operation) {
+  try { return await operation(); }
+  catch (error) {
+    showToast(error.message || 'Could not save priority');
+    return false;
+  }
 }
 
 function renderPriorityItem(item, index, total) {
@@ -540,8 +437,7 @@ async function renderPriorityBoard() {
     empty.style.display = today.length > 0 ? 'none' : 'flex';
   } catch (err) {
     console.warn('[tab-out] Could not load priorities:', err);
-    list.style.display = 'none';
-    empty.style.display = 'flex';
+    showToast('Could not load priorities. Please reload the extension.');
   }
 }
 
@@ -1458,10 +1354,9 @@ document.addEventListener('click', async (e) => {
     const id = actionEl.dataset.priorityId;
     if (!id) return;
 
-    await updatePriorityTask(id, {
+    await runPriorityAction(() => updatePriorityTask(id, {
       completed: actionEl.checked,
-      completedAt: actionEl.checked ? new Date().toISOString() : null,
-    });
+    }));
     await renderPriorityBoard();
     return;
   }
@@ -1471,7 +1366,7 @@ document.addEventListener('click', async (e) => {
     const id = actionEl.dataset.priorityId;
     if (!id || actionEl.disabled) return;
 
-    await movePriorityTask(id, action === 'move-priority-up' ? -1 : 1);
+    await runPriorityAction(() => movePriorityTask(id, action === 'move-priority-up' ? -1 : 1));
     await renderPriorityBoard();
     return;
   }
@@ -1481,8 +1376,7 @@ document.addEventListener('click', async (e) => {
     const id = actionEl.dataset.priorityId;
     if (!id) return;
 
-    await deletePriorityTask(id);
-    showToast('Priority removed');
+    if (await runPriorityAction(() => deletePriorityTask(id))) showToast('Priority removed · history kept');
     await renderPriorityBoard();
     return;
   }
@@ -1744,7 +1638,7 @@ if (priorityForm) {
       return;
     }
 
-    await addPriorityTask(input.value);
+    if (!await runPriorityAction(() => addPriorityTask(input.value))) return;
     input.value = '';
     await renderPriorityBoard();
     input.focus();
@@ -1762,9 +1656,9 @@ document.addEventListener('change', async (e) => {
     return;
   }
 
-  await updatePriorityTask(input.dataset.priorityId, {
+  await runPriorityAction(() => updatePriorityTask(input.dataset.priorityId, {
     text: text.slice(0, 160),
-  });
+  }));
 });
 
 document.addEventListener('keydown', (e) => {
@@ -1815,7 +1709,7 @@ document.addEventListener('drop', async (e) => {
     el.classList.remove('drag-over');
   });
 
-  await reorderPriorityTasks(draggedPriorityId, targetId);
+  await runPriorityAction(() => reorderPriorityTasks(draggedPriorityId, targetId));
   draggedPriorityId = null;
   await renderPriorityBoard();
 });
@@ -1874,4 +1768,112 @@ document.addEventListener('input', async (e) => {
 /* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+const syncSettings = document.getElementById('prioritySyncSettings');
+syncSettings.addEventListener('click', () => {
+  const details = document.getElementById('prioritySyncDetails');
+  details.hidden = !details.hidden;
+  syncSettings.setAttribute('aria-expanded', String(!details.hidden));
+});
+
+document.getElementById('prioritySyncForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('prioritySyncConnect');
+  const token = document.getElementById('prioritySyncToken');
+  const feedback = document.getElementById('prioritySyncFeedback');
+  button.disabled = true;
+  feedback.textContent = 'Connecting…';
+  try {
+    const status = await priorityRequest('sync-configure', { config: {
+      owner: document.getElementById('prioritySyncOwner').value,
+      repo: document.getElementById('prioritySyncRepo').value,
+      token: token.value,
+    } });
+    feedback.textContent = status.state === 'error' ? status.message : '';
+    if (status.state === 'synced') showToast('Private GitHub sync connected');
+  } catch (error) {
+    feedback.textContent = error.message;
+  } finally {
+    token.value = '';
+    button.disabled = false;
+    await renderPrioritySync();
+    await refreshPriorityView();
+  }
+});
+
+document.getElementById('prioritySyncNow').addEventListener('click', async (event) => {
+  event.currentTarget.disabled = true;
+  await runPriorityAction(() => priorityRequest('sync-now'));
+  document.getElementById('prioritySyncNow').disabled = false;
+  await renderPrioritySync();
+  await refreshPriorityView();
+});
+
+document.getElementById('prioritySyncKeychain').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const feedback = document.getElementById('prioritySyncFeedback');
+  button.disabled = true;
+  feedback.textContent = 'Connecting with this Mac’s GitHub authorization…';
+  try {
+    const status = await priorityRequest('sync-keychain');
+    feedback.textContent = status.state === 'error' ? status.message : '';
+    if (status.state === 'synced') showToast('Private GitHub sync connected');
+  } catch (error) {
+    feedback.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await renderPrioritySync();
+    await refreshPriorityView();
+  }
+});
+
+document.getElementById('prioritySyncDisconnect').addEventListener('click', async () => {
+  await runPriorityAction(() => priorityRequest('sync-disconnect'));
+  document.getElementById('prioritySyncToken').value = '';
+  document.getElementById('prioritySyncFeedback').textContent = '';
+  await renderPrioritySync();
+});
+
+let priorityViewDirty = false;
+async function refreshPriorityView() {
+  // A remote update must not replace a title while the user is editing it.
+  if (document.activeElement?.matches('.priority-task-input') || draggedPriorityId) {
+    priorityViewDirty = true;
+    return;
+  }
+  priorityViewDirty = false;
+  await renderPriorityBoard();
+}
+
+document.addEventListener('focusout', event => {
+  if (priorityViewDirty && event.target.matches('.priority-task-input')) {
+    setTimeout(() => refreshPriorityView(), 0);
+  }
+});
+document.addEventListener('dragend', () => {
+  if (priorityViewDirty) refreshPriorityView();
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.priorityJournal) refreshPriorityView();
+  if (changes.prioritySyncStatus || changes.prioritySyncConfig) {
+    renderPrioritySync().catch(() => {});
+  }
+});
+
+async function wakePrioritySync() {
+  if (document.hidden) return;
+  await runPriorityAction(() => priorityRequest('sync-wake'));
+  await renderPrioritySync();
+  await refreshPriorityView();
+}
+
+window.addEventListener('online', wakePrioritySync);
+window.addEventListener('focus', wakePrioritySync);
+document.addEventListener('visibilitychange', wakePrioritySync);
+// Refresh across midnight even when this new-tab page stays open.
+setInterval(() => { if (!document.hidden) refreshPriorityView(); }, 60000);
+
 renderDashboard();
+renderPrioritySync().catch(() => {});
+wakePrioritySync();

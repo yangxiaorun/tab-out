@@ -47,7 +47,7 @@
   </div>
 
   <!-- ================================================================
-       TODAY'S PRIORITIES — local, manually maintained task list
+       TODAY'S PRIORITIES — local history with optional private GitHub sync
        ================================================================ -->
   <section class="priority-panel" id="priorityPanel">
     <div class="priority-heading">
@@ -63,6 +63,28 @@
         <strong id="priorityProgressValue">0/0</strong>
         <span>done</span>
       </div>
+    </div>
+
+    <div class="priority-sync-bar">
+      <span id="prioritySyncStatus" class="priority-sync-status" role="status">Stored on this device</span>
+      <button type="button" class="action-btn" id="prioritySyncNow" hidden>Sync now</button>
+      <button type="button" class="action-btn" id="prioritySyncSettings" aria-expanded="false" aria-controls="prioritySyncDetails">Sync settings</button>
+    </div>
+    <div class="priority-sync-details" id="prioritySyncDetails" hidden>
+      <p>Keep your priorities and their history in a separate <strong>private GitHub repository</strong>. Only todo records are synced.</p>
+      <button type="button" class="action-btn" id="prioritySyncKeychain">Use this Mac's GitHub key</button>
+      <form id="prioritySyncForm" class="priority-sync-form">
+        <label>Repository owner<input id="prioritySyncOwner" type="text" autocomplete="off" placeholder="Your GitHub username" required></label>
+        <label>Private repository<input id="prioritySyncRepo" type="text" autocomplete="off" placeholder="tab-out-todo-private" required></label>
+        <label class="priority-sync-token">Access token<input id="prioritySyncToken" type="password" autocomplete="off" spellcheck="false" required></label>
+        <div class="priority-sync-controls">
+          <button type="submit" class="action-btn primary" id="prioritySyncConnect">Connect &amp; sync</button>
+          <button type="button" class="action-btn danger" id="prioritySyncDisconnect" hidden>Disconnect</button>
+        </div>
+      </form>
+      <p class="priority-sync-hint">Use a fine-grained token limited to this repository, with Contents: read and write. Configure the same repository on each device. The token stays in this browser; it is never committed.</p>
+      <p class="priority-sync-hint">Deleting a priority hides it from your board and keeps its history. Disconnecting keeps both your local data and the GitHub history.</p>
+      <p id="prioritySyncFeedback" class="priority-sync-feedback" role="status"></p>
     </div>
 
     <form class="priority-form" id="priorityForm">
