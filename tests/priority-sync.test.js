@@ -58,6 +58,17 @@ function github(initial) {
   return server;
 }
 
+test('GitHub transport binds browser fetch to the global scope', async () => {
+  const db = storage();
+  const store = new Store.Store(db);
+  const fetcher = function () {
+    assert.equal(this, globalThis);
+    return response(200, { private: true, default_branch: 'main', permissions: { push: true } });
+  };
+  const sync = new GitHubSync(store, db, fetcher);
+  assert.equal((await sync.verify(config)).branch, 'main');
+});
+
 test('carryover keeps the original identity, plan time, and all completion/reopen events', async () => {
   const db = storage();
   const store = new Store.Store(db);
@@ -150,7 +161,9 @@ test('offline changes sync on recovery and no credential enters GitHub history',
   const sync = new GitHubSync(store, db, server.fetch);
   await store.dispatch({ type: 'add', text: '中文计划 📆' });
   server.online = false;
-  assert.equal((await sync.run()).state, 'error');
+  const offline = await sync.run();
+  assert.equal(offline.state, 'error');
+  assert.match(offline.message, /Chrome reported: offline/);
   assert.equal(db.data.priorityJournal.events.length, 1);
   server.online = true;
   assert.equal((await sync.run()).state, 'synced');
@@ -276,6 +289,7 @@ test('background messages serialize multiple tabs and allow local edits while ne
     chrome: {
       storage: { local: db },
       runtime: { id: 'extension-id', getURL: p => `chrome-extension://extension-id/${p}`,
+        sendNativeMessage: async () => { throw new Error('Native host has exited.'); },
         onMessage: { addListener(fn) { listener = fn; } }, onInstalled: event, onStartup: event },
       alarms: { get: async () => ({ name: 'existing' }), create: async () => {}, onAlarm: event },
       tabs: { query: async () => [], onCreated: event, onRemoved: event, onUpdated: event },
@@ -292,6 +306,9 @@ test('background messages serialize multiple tabs and allow local edits while ne
       id: 'extension-id', url: 'chrome-extension://extension-id/index.html',
     }, resolve), true);
   });
+  const keychain = await send({ action: 'sync-keychain' });
+  assert.equal(keychain.ok, false);
+  assert.match(keychain.error, /Native host has exited/);
   const syncing = send({ action: 'sync-now' });
   const results = await Promise.all(Array.from({ length: 10 }, (_, i) =>
     send({ action: 'dispatch', operation: { type: 'add', text: `tab ${i}` } })));

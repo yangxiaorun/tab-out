@@ -82,7 +82,7 @@ On this Mac, the optional Keychain helper can create the dedicated repository `y
 python3 scripts/github-todo-host.py --install
 ```
 
-Then open a new Tab Out tab, select **Sync settings**, and click **Use this Mac's GitHub key**. The helper reads the internet-password entry for `github.com` / `yangxiaorun`. It verifies the account and requires a private repository. It never prints or writes the token to files. If Chrome's extension ID cannot be detected, add `--extension-id <ID>` from the extensions page. Keep this repository at its installed path, or rerun the installer after moving it.
+The installer copies the helper to `~/Library/Application Support/Tab Out/`, so moving or updating this code repository does not break Chrome's native-host registration. Restart Chrome after installation, then open a new Tab Out tab, select **Sync settings**, and click **Use this Mac's GitHub key**. The helper reads the internet-password entry for `github.com` / `yangxiaorun`. It verifies the account and requires a private repository. It never prints or writes the token to files. If Chrome's extension ID cannot be detected, add `--extension-id <ID>` from the extensions page.
 
 On another device, load the extension and configure **Sync settings** with the same private repository and a GitHub fine-grained token scoped to that repository, with **Contents: read and write**. Initialize a manually created repository with a README. Tokens are stored in local extension storage, never in Chrome sync or GitHub commits. You can use a separate token on each device.
 

@@ -3,8 +3,10 @@
 repository, and return credentials only through Chrome's native message pipe.
 No tokens or todo data are written to files."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -14,6 +16,12 @@ import urllib.request
 HOST = "com.tab_out.github_keychain"
 ACCOUNT = "yangxiaorun"
 REPO = "tab-out-todo-private"
+
+
+def unpacked_extension_id(path):
+    digest = hashlib.sha256(str(path.resolve()).encode()).digest()[:16]
+    return "".join(chr(ord("a") + nibble)
+                   for byte in digest for nibble in (byte >> 4, byte & 0x0F))
 
 
 def bootstrap(repository=REPO):
@@ -67,7 +75,8 @@ def bootstrap(repository=REPO):
 
 def extension_ids():
     base = Path.home() / "Library/Application Support/Google/Chrome"
-    ids = set()
+    local_extension = Path(__file__).resolve().parent.parent / "extension"
+    ids = {unpacked_extension_id(local_extension)} if local_extension.is_dir() else set()
     for profile in [base / "Default", *base.glob("Profile *")]:
         for filename in ["Preferences", "Secure Preferences"]:
             try:
@@ -76,7 +85,6 @@ def extension_ids():
                 continue
             for ext_id, details in settings.items():
                 ext_path = details.get("path", "")
-                local_extension = Path(__file__).resolve().parent.parent / "extension"
                 if ext_path and Path(ext_path).resolve() == local_extension:
                     ids.add(ext_id)
     return sorted(ids)
@@ -89,8 +97,14 @@ def install(ids):
         raise ValueError("Tab Out extension ID was not found. Install the extension, then run this script with --install --extension-id <ID>.")
     if any(not re.fullmatch("[a-p]{32}", ext_id) for ext_id in ids):
         raise ValueError("Invalid Chrome extension ID.")
-    script = Path(__file__).resolve()
-    script.chmod(0o755)
+    source = Path(__file__).resolve()
+    app_folder = Path.home() / "Library/Application Support/Tab Out"
+    app_folder.mkdir(parents=True, exist_ok=True)
+    script = app_folder / source.name
+    staged_script = app_folder / (source.name + ".tmp")
+    shutil.copyfile(source, staged_script)
+    staged_script.chmod(0o755)
+    staged_script.replace(script)
     folder = Path.home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts"
     folder.mkdir(parents=True, exist_ok=True)
     manifest = folder / (HOST + ".json")
@@ -101,9 +115,9 @@ def install(ids):
         "type": "stdio",
         "allowed_origins": ["chrome-extension://" + ext_id + "/" for ext_id in ids],
     }, indent=2) + "\n")
-    manifest.chmod(0o600)
+    manifest.chmod(0o644)
     print("Installed GitHub Keychain helper for Tab Out: " + ", ".join(ids))
-    print("Reload Tab Out, then click Sync settings > Use this Mac's GitHub key.")
+    print("Restart Chrome, then click Sync settings > Use this Mac's GitHub key.")
 
 
 def native_main():

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -25,6 +26,27 @@ def reply(value):
 
 
 class NativeHostTests(unittest.TestCase):
+    def test_installer_uses_stable_app_support_copy_and_path_based_extension_id(self):
+        extension = Path(host.__file__).resolve().parents[1] / "extension"
+        extension_id = host.unpacked_extension_id(extension)
+        self.assertRegex(extension_id, r"^[a-p]{32}$")
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with patch.object(host.Path, "home", return_value=home):
+                host.install([extension_id])
+
+            installed = home / "Library/Application Support/Tab Out/github-todo-host.py"
+            manifest = home / (
+                "Library/Application Support/Google/Chrome/NativeMessagingHosts/"
+                "com.tab_out.github_keychain.json"
+            )
+            settings = json.loads(manifest.read_text())
+            self.assertEqual(settings["path"], str(installed))
+            self.assertEqual(settings["allowed_origins"], [f"chrome-extension://{extension_id}/"])
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o644)
+
     def test_creates_only_private_repository_and_returns_no_token_in_files(self):
         requests = []
 

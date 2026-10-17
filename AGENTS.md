@@ -94,5 +94,5 @@ Once the extension is loaded:
 - Saved tabs are stored in `chrome.storage.local` (persists across sessions).
 - Local by default. Optional daily todo sync sends only todo history to a separate private GitHub repository; tabs and saved links remain local.
 - Todo writes belong to the background worker and `priority-store.js`; retain append-only events and never commit tokens or personal todo data to this code repository.
-- Mac GitHub authorization can use `scripts/github-todo-host.py --install`, then the Keychain connection button. Other devices configure their own token in Sync settings.
+- Mac GitHub authorization can use `scripts/github-todo-host.py --install`, restart Chrome, then use the Keychain connection button. The installer copies the helper to Application Support so repository moves do not break it. Other devices configure their own token in Sync settings.
 - To update: `cd tab-out && git pull`, then reload the extension in `chrome://extensions`.

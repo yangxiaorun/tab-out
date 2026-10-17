@@ -10,7 +10,7 @@
     constructor(store, storage, fetcher = fetch) {
       this.store = store;
       this.storage = storage;
-      this.fetcher = fetcher;
+      this.fetcher = fetcher.bind(globalThis);
     }
 
     async config() {
@@ -33,8 +33,9 @@
           cache: 'no-store',
           redirect: 'error',
         });
-      } catch {
-        throw new Error('GitHub is unreachable. Your changes are saved locally and will retry.');
+      } catch (error) {
+        const detail = error?.message ? ` Chrome reported: ${error.message}` : '';
+        throw new Error(`GitHub is unreachable. Your changes are saved locally and will retry.${detail}`);
       }
       if (!response.ok) {
         const error = new Error(

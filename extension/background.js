@@ -66,8 +66,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let reply;
         try {
           reply = await chrome.runtime.sendNativeMessage('com.tab_out.github_keychain', { action: 'bootstrap' });
-        } catch {
-          throw new Error('Install the Mac Keychain helper first: python3 scripts/github-todo-host.py --install');
+        } catch (error) {
+          const detail = error?.message ? ` Chrome reported: ${error.message}` : '';
+          throw new Error(`Could not start the Mac Keychain helper.${detail}`);
         }
         if (!reply?.ok) throw new Error(reply?.error || 'Could not connect GitHub from Keychain.');
         const result = await prioritySync.configure(reply.config);
