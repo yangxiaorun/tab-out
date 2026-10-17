@@ -74,19 +74,21 @@ Everything runs inside the Chrome extension. Saved tabs are stored in `chrome.st
 
 ## Todo sync setup
 
-Reload the updated extension in `chrome://extensions`. Version 1.1 adds GitHub API, background alarms, native messaging, and local unlimited-storage permissions.
+Reload the updated extension in `chrome://extensions`. Version 1.1 adds GitHub API, background alarms, native messaging, and local unlimited-storage permissions. This reload is required after pulling the update because an already-running Manifest V3 background worker keeps the old code and permissions. If the dashboard reports that its background worker is still on the old version, reload the extension and reopen the new tab.
 
 For a repeatable installation, upgrade, verification, and troubleshooting procedure on another Mac, follow the [macOS installation and sync runbook](docs/macos-install.md).
 
-On this Mac, the optional Keychain helper can create the dedicated repository `yangxiaorun/tab-out-todo-private` and connect using the existing GitHub PAT:
+GitHub is never required for local todo entry. Without sync configuration, priorities are stored in `chrome.storage.local` and every board operation remains available.
+
+On this Mac, the optional Keychain helper can create the dedicated repository `yangxiaorun/tab-out-todo-private` and connect when a GitHub PAT is stored in Keychain under `github.com` / `yangxiaorun`:
 
 ```bash
 python3 scripts/github-todo-host.py --install
 ```
 
-The installer copies the helper to `~/Library/Application Support/Tab Out/`, so moving or updating this code repository does not break Chrome's native-host registration. Restart Chrome after installation, then open a new Tab Out tab, select **Sync settings**, and click **Use this Mac's GitHub key**. The helper reads the internet-password entry for `github.com` / `yangxiaorun`. It verifies the account and requires a private repository. It never prints or writes the token to files. If Chrome's extension ID cannot be detected, add `--extension-id <ID>` from the extensions page.
+The installer copies the helper to `~/Library/Application Support/Tab Out/`, so moving or updating this code repository does not break Chrome's native-host registration. Restart Chrome after installation, then open a new Tab Out tab, select **Sync settings**, and click **Use this Mac's GitHub key**. The helper reads that internet-password entry, verifies the account, and requires a private repository. It does not create GitHub authorization and never prints or writes the token to files. If Chrome's extension ID cannot be detected, add `--extension-id <ID>` from the extensions page.
 
-On another device, load the extension and configure **Sync settings** with the same private repository and a GitHub fine-grained token scoped to that repository, with **Contents: read and write**. Initialize a manually created repository with a README. Tokens are stored in local extension storage, never in Chrome sync or GitHub commits. You can use a separate token on each device.
+On another device, load the extension and configure **Sync settings** with the same private repository and a GitHub fine-grained token scoped to that repository, with **Contents: read and write**. The access-token field requires a PAT, not the GitHub account password. Initialize a manually created repository with a README. Tokens are stored in local extension storage, never in Chrome sync or GitHub commits. Each Mac must connect separately and may use its own token.
 
 The board saves edits locally before any network operation. The background worker syncs shortly after edits, at browser startup, on opening/focusing Tab Out, and once per minute while Chrome is running. Offline changes retry automatically. **Sync now** requests an immediate update. Only todo history is uploaded; tab URLs, saved links, and credentials are excluded.
 
@@ -105,7 +107,7 @@ The separate data repository contains `todo/history.json`, a UTF-8 document with
 | `deviceId`, `clock` | Device identity and logical ordering for deterministic merges |
 | `data` | Initial plan/title or changed fields |
 
-A `created` event stores the original title, `createdAt`, plan `date`, and `originalPlannedDate`. A `completed` event preserves the exact completion click time. Reopening or deleting does not remove earlier completion events. Deleting hides a task and retains its history. Unfinished tasks keep the same ID and original creation time across days; completed tasks leave the daily board after their completion day.
+A `created` event stores the original title, `createdAt`, plan `date`, and `originalPlannedDate`. A `completed` event preserves the exact completion click time. Reopening or deleting does not remove earlier completion events. Deleting hides a task and retains its history. Unfinished tasks keep the same ID and original creation time across days; completed tasks leave the active board immediately while their completion events remain in history.
 
 Existing local `priorityTasks` are imported once, with their saved timestamps; the original local array is retained as a migration backup. Old carryover copies remain separate archival records because their previous format did not retain parent IDs. Previously deleted tasks and earlier completion clicks overwritten by the old implementation cannot be recovered. Missing legacy timestamps are marked as legacy and are not represented as exact historical click times.
 

@@ -7,10 +7,12 @@
   const PATH = 'todo/history.json';
 
   class GitHubSync {
-    constructor(store, storage, fetcher = fetch) {
+    constructor(store, storage, fetcher) {
       this.store = store;
       this.storage = storage;
-      this.fetcher = fetcher.bind(globalThis);
+      this.fetcher = fetcher
+        ? (...args) => fetcher(...args)
+        : (...args) => globalThis.fetch(...args);
     }
 
     async config() {

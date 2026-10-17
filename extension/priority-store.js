@@ -100,7 +100,7 @@
   function board(journal, today = dateKey()) {
     const all = project(journal);
     const visible = all.filter(task => !task.deleted && !task.carriedToDate &&
-      task.date <= today && (!task.completed || task.completedDate === today));
+      task.date <= today && !task.completed);
     visible.sort((a, b) => {
       const aDate = a.orderDate || a.date;
       const bDate = b.orderDate || b.date;
@@ -111,7 +111,15 @@
       ...task,
       inherited: task.date < today || Boolean(task.inherited),
     }));
-    return { all, today: tasks, inheritedCount: tasks.filter(task => task.inherited && !task.completed).length };
+    const completedCount = all.filter(task =>
+      !task.deleted && task.completed && task.completedDate === today
+    ).length;
+    return {
+      all,
+      today: tasks,
+      completedCount,
+      inheritedCount: tasks.filter(task => task.inherited).length,
+    };
   }
 
   // Stable import IDs prevent the same old local item from importing twice.
@@ -195,6 +203,7 @@
       const today = dateKey(now);
       if (action.type === 'state') return board(journal, today);
       const visible = board(journal, today).today;
+      const task = project(journal).find(item => item.id === action.id);
       let clock = journal.events.reduce((max, event) => Math.max(max, event.clock), 0);
       const append = (type, taskId, data) => {
         journal.events.push({
@@ -202,7 +211,6 @@
           at: now.toISOString(), date: today, utcOffsetMinutes: -now.getTimezoneOffset(),
         });
       };
-      const task = visible.find(item => item.id === action.id);
       if (action.type === 'add') {
         const text = String(action.text || '').trim().slice(0, 160);
         if (!text) return false;
@@ -223,6 +231,7 @@
         append('deleted', task.id, {});
       } else if ((action.type === 'move' || action.type === 'reorder') && task) {
         const sourceIndex = visible.findIndex(item => item.id === task.id);
+        if (sourceIndex < 0) return;
         const targetIndex = action.type === 'move' ? sourceIndex + action.direction :
           visible.findIndex(item => item.id === action.targetId);
         if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= visible.length || targetIndex === sourceIndex) return;

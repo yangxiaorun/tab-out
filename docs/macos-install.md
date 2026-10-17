@@ -119,13 +119,37 @@ server: github.com
 account: yangxiaorun
 ```
 
-An agent with the `github-account-yangxiaorun` skill must follow that skill and
-reuse the existing Keychain credential. Do not create or duplicate a token
-unless the user explicitly requests it.
+The credential must be a GitHub personal access token (PAT), not the GitHub
+account password. An agent with the `github-account-yangxiaorun` skill must
+follow that skill and reuse the existing Keychain credential. Do not create or
+duplicate a token unless the user explicitly requests it.
+
+An agent can verify that the Keychain item exists without printing its secret:
+
+```bash
+security find-internet-password -a yangxiaorun -s github.com >/dev/null 2>&1
+```
+
+The required agent flow is:
+
+1. Run `python3 scripts/github-todo-host.py --install`.
+2. Run `python3 scripts/github-todo-host.py --check`.
+3. Restart Chrome, then explicitly reload Tab Out in
+   `chrome://extensions`. A browser restart alone may retain old unpacked
+   extension source.
+4. Open Tab Out, expand **Sync settings**, and click
+   **Use this Mac's GitHub key**.
+5. Wait for **Synced HH:MM** and verify the status names
+   `yangxiaorun/tab-out-todo-private`.
+
+Do not stop after installing the helper. **Stored on this device** means that
+the PAT has not been saved to this Chrome profile and synchronization is still
+disabled.
 
 It verifies the account, creates the dedicated repository when absent, rejects
 a public repository, and returns the token only through Chrome's native
-messaging pipe.
+messaging pipe. This is the preferred credential-entry path because the PAT is
+not exposed in terminal output, chat, screenshots, or command arguments.
 
 If this Mac does not have that Keychain entry, use a GitHub fine-grained token
 in **Sync settings**:
@@ -135,8 +159,13 @@ in **Sync settings**:
 - Repository access: only `tab-out-todo-private`
 - Permission: **Contents: Read and write**
 
-Enter the token only in the extension's password field. Do not expose it in
-terminal output, logs, chat, commits, or screenshots.
+Enter the PAT only in the extension's **Access token** password field. Do not
+enter the GitHub account password. Have the user enter the PAT directly unless
+they explicitly authorize another secure credential path. Never expose it in
+terminal output, logs, chat, commits, screenshots, or the code repository.
+
+Repeat this connection procedure on every Mac. Credentials remain local to
+each Chrome profile; they are intentionally not synchronized through GitHub.
 
 ## Acceptance
 
@@ -149,6 +178,8 @@ Installation is complete only when all of these are true:
 5. Existing local tasks remain visible after connection.
 6. An unfinished task created on one connected Mac appears on another
    connected Mac after **Sync now** or the next automatic sync.
+7. Completing a task removes it from the active board on both Macs after sync,
+   while its `completed` event remains in `todo/history.json`.
 
 The data repository is:
 
@@ -182,8 +213,9 @@ Then restart all of Chrome with `chrome://restart`.
 
 ### `Illegal invocation`
 
-This is the GitHub transport defect in version `1.1.0`. Pull the latest
-`main`, confirm version `1.1.1` or newer, and reload the extension.
+This is the GitHub transport defect in an older worker. Pull the latest `main`
+and click **Reload** for Tab Out in `chrome://extensions`. Restarting Chrome
+without reloading the unpacked extension may leave the old worker active.
 
 ### HTTP `401`, `403`, or `404`
 

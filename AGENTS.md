@@ -17,7 +17,7 @@ Before doing anything technical, tell the user what they're about to get:
 > - **Duplicate detection** flags when you have the same page open twice
 > - **Click any tab title to jump to it** even across different Chrome windows
 > - **Save for later** bookmark individual tabs to a checklist before closing them
-> - **100% local** no server, no accounts, no data sent anywhere
+> - **Local by default** no server or account is required; optional todo sync sends only todo history to a private GitHub repository
 >
 > It's just a Chrome extension. Setup takes about 1 minute.
 
@@ -69,7 +69,46 @@ open "chrome://extensions"
 
 ---
 
-## Step 3 -- Show them around
+## Step 3 -- Connect todo sync on each Mac
+
+Installing the extension or the native helper does not enable sync by itself.
+Each Mac must be connected separately to the same private repository.
+
+On a Mac that has the `github.com` / `yangxiaorun` PAT in Keychain:
+
+```bash
+python3 scripts/github-todo-host.py --install
+python3 scripts/github-todo-host.py --check
+```
+
+Then:
+
+1. Restart Chrome with `chrome://restart`.
+2. Reload Tab Out in `chrome://extensions`; restarting Chrome alone can leave
+   an unpacked extension worker on old source.
+3. Open Tab Out, expand **Sync settings**, and click
+   **Use this Mac's GitHub key**.
+4. Wait until the page shows **Synced HH:MM** and the status identifies
+   `yangxiaorun/tab-out-todo-private`.
+
+The Keychain button is the preferred way for an agent to fill the credential:
+the native helper reads the PAT and sends it directly to the extension. Never
+print the PAT, paste it into chat, add it to a command argument, or write it to
+a repository file.
+
+If the Keychain entry is unavailable, the **Access token** field requires a
+GitHub personal access token, not the GitHub account password. Use a
+fine-grained token restricted to `tab-out-todo-private` with
+**Contents: Read and write**. Have the user enter it directly unless they have
+explicitly authorized another secure credential path.
+
+Do not report sync as configured while the page says
+**Stored on this device**. A successful setup must also preserve local tasks,
+merge remote tasks, and create or update `todo/history.json`.
+
+---
+
+## Step 4 -- Show them around
 
 Once the extension is loaded:
 
@@ -94,5 +133,7 @@ Once the extension is loaded:
 - Saved tabs are stored in `chrome.storage.local` (persists across sessions).
 - Local by default. Optional daily todo sync sends only todo history to a separate private GitHub repository; tabs and saved links remain local.
 - Todo writes belong to the background worker and `priority-store.js`; retain append-only events and never commit tokens or personal todo data to this code repository.
-- Mac GitHub authorization can use `scripts/github-todo-host.py --install`, restart Chrome, then use the Keychain connection button. The installer copies the helper to Application Support so repository moves do not break it. Other devices configure their own token in Sync settings.
+- Mac GitHub authorization must use `scripts/github-todo-host.py --install`, a Chrome restart and extension reload, then the Keychain connection button. The installer copies the helper to Application Support so repository moves do not break it.
+- Every Mac needs its own local credential but must target the same private repository. The GitHub account password is not valid in the token field.
+- Completed todos disappear from the active board while their append-only completion events remain in the shared history.
 - To update: `cd tab-out && git pull`, then reload the extension in `chrome://extensions`.

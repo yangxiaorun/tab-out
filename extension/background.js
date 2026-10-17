@@ -21,6 +21,7 @@ let priorityQueue = Promise.resolve();
 let syncTimer;
 let lastSyncAttempt = 0;
 const SYNC_ALARM = 'priority-github-sync';
+const PRIORITY_PROTOCOL_VERSION = 1;
 
 function queuePriority(operation) {
   const result = priorityQueue.then(operation);
@@ -48,6 +49,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Only this extension's own pages may issue todo operations.
   if (sender.id !== chrome.runtime.id ||
       (sender.url && !sender.url.startsWith(chrome.runtime.getURL('')))) return;
+  if (message.protocolVersion !== PRIORITY_PROTOCOL_VERSION) {
+    sendResponse({
+      ok: false,
+      error: 'Tab Out components are from different versions. Reload the extension in chrome://extensions.',
+    });
+    return false;
+  }
   let operation;
   if (message.action === 'sync-status') {
     operation = prioritySync.status();

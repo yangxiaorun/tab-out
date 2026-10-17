@@ -58,16 +58,62 @@ function github(initial) {
   return server;
 }
 
-test('GitHub transport binds browser fetch to the global scope', async () => {
+test('GitHub transport does not rebind an injected fetch implementation', async () => {
   const db = storage();
   const store = new Store.Store(db);
   const fetcher = function () {
-    assert.equal(this, globalThis);
+    'use strict';
+    assert.equal(this, undefined);
     return response(200, { private: true, default_branch: 'main', permissions: { push: true } });
   };
   const sync = new GitHubSync(store, db, fetcher);
   assert.equal((await sync.verify(config)).branch, 'main');
 });
+
+function backgroundHarness(db, fetcher = async () => response(401, {})) {
+  let listener;
+  const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
+  const event = { addListener() {} };
+  const context = vm.createContext({
+    PriorityStore: Store, PrioritySync: { GitHubSync },
+    importScripts() {}, setTimeout() { return 1; }, clearTimeout() {},
+    Date, Promise, fetch: fetcher,
+    chrome: {
+      storage: { local: db },
+      runtime: { id: 'extension-id', getURL: p => `chrome-extension://extension-id/${p}`,
+        sendNativeMessage: async () => { throw new Error('Native host has exited.'); },
+        onMessage: { addListener(fn) { listener = fn; } }, onInstalled: event, onStartup: event },
+      alarms: { get: async () => ({ name: 'existing' }), create: async () => {}, onAlarm: event },
+      tabs: { query: async () => [], onCreated: event, onRemoved: event, onUpdated: event },
+      action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+    },
+  });
+  context.PrioritySync = { GitHubSync: class extends GitHubSync {
+    constructor(store, storage) { super(store, storage, context.fetch); }
+  } };
+  vm.runInContext(source, context);
+  const sender = {
+    id: 'extension-id',
+    url: 'chrome-extension://extension-id/index.html',
+  };
+  const send = message => new Promise(resolve => {
+    assert.equal(listener({
+      channel: 'priority',
+      protocolVersion: 1,
+      ...message,
+    }, sender, resolve), true);
+  });
+  const sendVersion = (message, protocolVersion) => new Promise(resolve => {
+    let response;
+    const keepOpen = listener({
+      channel: 'priority',
+      protocolVersion,
+      ...message,
+    }, sender, value => { response = value; });
+    resolve({ keepOpen, response });
+  });
+  return { send, sendVersion };
+}
 
 test('carryover keeps the original identity, plan time, and all completion/reopen events', async () => {
   const db = storage();
@@ -83,6 +129,8 @@ test('carryover keeps the original identity, plan time, and all completion/reope
   await store.dispatch({ type: 'update', id: first.id, patch: { completed: true } }, time('2026-10-13'));
   assert.deepEqual(db.data.priorityJournal.events.map(e => e.type), ['created', 'completed', 'reopened', 'completed']);
   assert.equal(Store.project(db.data.priorityJournal)[0].completedAt, time('2026-10-13').toISOString());
+  assert.equal(Store.board(db.data.priorityJournal, '2026-10-13').today.length, 0);
+  assert.equal(Store.board(db.data.priorityJournal, '2026-10-13').completedCount, 1);
   assert.equal(Store.board(db.data.priorityJournal, '2026-10-14').today.length, 0);
 });
 
@@ -274,37 +322,37 @@ test('disconnect removes the token while retaining local and remote history', as
   assert.equal(db.data.priorityJournal.events.length, 1);
 });
 
+test('background stores todos without a sync repository and rejects mixed component versions', async () => {
+  const db = storage();
+  const { send, sendVersion } = backgroundHarness(db);
+
+  const incompatible = await sendVersion({
+    action: 'dispatch',
+    operation: { type: 'add', text: 'must not be stored' },
+  }, 0);
+  assert.equal(incompatible.keepOpen, false);
+  assert.equal(incompatible.response.ok, false);
+  assert.match(incompatible.response.error, /different versions/i);
+
+  const added = await send({
+    action: 'dispatch',
+    operation: { type: 'add', text: 'local first' },
+  });
+  assert.equal(added.ok, true);
+  assert.equal(added.data, true);
+  const state = await send({ action: 'dispatch', operation: { type: 'state' } });
+  assert.equal(state.data.today[0].text, 'local first');
+  assert.equal(db.data[CONFIG_KEY], undefined);
+  assert.equal(db.data[STATUS_KEY], undefined);
+});
+
 test('background messages serialize multiple tabs and allow local edits while network is blocked', async () => {
   const db = storage({ [CONFIG_KEY]: config });
-  let listener;
   let releaseNetwork;
   const networkGate = new Promise(resolve => { releaseNetwork = resolve; });
-  const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
-  const event = { addListener() {} };
-  const context = vm.createContext({
-    PriorityStore: Store, PrioritySync: { GitHubSync },
-    importScripts() {}, setTimeout() { return 1; }, clearTimeout() {},
-    Date, Promise,
-    fetch: async () => { await networkGate; return response(401, {}); },
-    chrome: {
-      storage: { local: db },
-      runtime: { id: 'extension-id', getURL: p => `chrome-extension://extension-id/${p}`,
-        sendNativeMessage: async () => { throw new Error('Native host has exited.'); },
-        onMessage: { addListener(fn) { listener = fn; } }, onInstalled: event, onStartup: event },
-      alarms: { get: async () => ({ name: 'existing' }), create: async () => {}, onAlarm: event },
-      tabs: { query: async () => [], onCreated: event, onRemoved: event, onUpdated: event },
-      action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
-    },
-  });
-  // This test-specific constructor uses the gated network.
-  context.PrioritySync = { GitHubSync: class extends GitHubSync {
-    constructor(store, db) { super(store, db, context.fetch); }
-  } };
-  vm.runInContext(source, context);
-  const send = message => new Promise(resolve => {
-    assert.equal(listener({ channel: 'priority', ...message }, {
-      id: 'extension-id', url: 'chrome-extension://extension-id/index.html',
-    }, resolve), true);
+  const { send } = backgroundHarness(db, async () => {
+    await networkGate;
+    return response(401, {});
   });
   const keychain = await send({ action: 'sync-keychain' });
   assert.equal(keychain.ok, false);

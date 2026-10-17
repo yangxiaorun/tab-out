@@ -288,8 +288,25 @@ async function dismissSavedTab(id) {
    Pending tasks keep their identity and original plan time across days.
    ---------------------------------------------------------------- */
 
+const PRIORITY_PROTOCOL_VERSION = 1;
+const PRIORITY_BACKEND_UNAVAILABLE =
+  'Tab Out was updated, but its background worker is still on the old version. Reload Tab Out in chrome://extensions, then reopen this tab.';
+
 async function priorityRequest(action, payload = {}) {
-  const response = await chrome.runtime.sendMessage({ channel: 'priority', action, ...payload });
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({
+      channel: 'priority',
+      protocolVersion: PRIORITY_PROTOCOL_VERSION,
+      action,
+      ...payload,
+    });
+  } catch (error) {
+    if (/receiving end does not exist|message port closed/i.test(error?.message || '')) {
+      throw new Error(PRIORITY_BACKEND_UNAVAILABLE);
+    }
+    throw error;
+  }
   if (!response?.ok) throw new Error(response?.error || 'Could not save priorities. Please reload the extension.');
   return response.data;
 }
@@ -414,8 +431,7 @@ async function renderPriorityBoard() {
   if (!list || !empty) return;
 
   try {
-    const { today, inheritedCount } = await getPriorityState();
-    const completedCount = today.filter(task => task.completed).length;
+    const { today, completedCount = 0, inheritedCount } = await getPriorityState();
 
     if (dateEl) {
       dateEl.textContent = new Date().toLocaleDateString('en-US', {
@@ -423,7 +439,7 @@ async function renderPriorityBoard() {
         day: 'numeric',
       });
     }
-    if (progressEl) progressEl.textContent = `${completedCount}/${today.length}`;
+    if (progressEl) progressEl.textContent = `${completedCount}/${today.length + completedCount}`;
     if (carryoverEl) {
       carryoverEl.textContent = inheritedCount > 0
         ? `${inheritedCount} unfinished item${inheritedCount !== 1 ? 's' : ''} carried over`
@@ -437,7 +453,7 @@ async function renderPriorityBoard() {
     empty.style.display = today.length > 0 ? 'none' : 'flex';
   } catch (err) {
     console.warn('[tab-out] Could not load priorities:', err);
-    showToast('Could not load priorities. Please reload the extension.');
+    showToast(err.message || 'Could not load priorities. Please reload the extension.');
   }
 }
 
