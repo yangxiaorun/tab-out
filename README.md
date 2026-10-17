@@ -76,6 +76,8 @@ Everything runs inside the Chrome extension. Saved tabs are stored in `chrome.st
 
 Reload the updated extension in `chrome://extensions`. Version 1.1 adds GitHub API, background alarms, native messaging, and local unlimited-storage permissions.
 
+For a repeatable installation, upgrade, verification, and troubleshooting procedure on another Mac, follow the [macOS installation and sync runbook](docs/macos-install.md).
+
 On this Mac, the optional Keychain helper can create the dedicated repository `yangxiaorun/tab-out-todo-private` and connect using the existing GitHub PAT:
 
 ```bash
